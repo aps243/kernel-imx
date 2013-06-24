@@ -4,6 +4,7 @@ Required properties:
 - compatible		: Must be "regulator-gpio".
 - states		: Selection of available voltages and GPIO configs.
                           if there are no states, then use a fixed regulator
+- regulator-type : "voltage" or "current"
 
 Optional properties:
 - enable-gpio		: GPIO to use to enable/disable the regulator.
@@ -22,6 +23,7 @@ Example:
 		regulator-name = "mmci-gpio-supply";
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <2600000>;
+		regulator-type = "voltage";
 		regulator-boot-on;
 
 		enable-gpio = <&gpio0 23 0x4>;

@@ -80,7 +80,3 @@ struct st7735fb_platform_data {
 #define ST7735_GMCTRP1	0xE0
 #define ST7735_GMCTRN1	0xE1
 #define ST7735_PWCTR6	0xFC
-
-
-
-

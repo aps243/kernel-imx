@@ -22,10 +22,15 @@
 #include <linux/spi/spi.h>
 #include <linux/delay.h>
 #include <linux/uaccess.h>
+#if defined(CONFIG_OF)
+#include <linux/of_platform.h>
+#include <linux/of_device.h>
+#include <linux/of_gpio.h>
+#endif
 
 #include <video/st7735fb.h>
-/*
-static struct st7735_function st7735_cfg_script[] = {
+
+static const struct st7735_function st7735_cfg_script[] = {
 	{ ST7735_START, ST7735_START},
 	{ ST7735_CMD, ST7735_SWRESET},
 	{ ST7735_DELAY, 150},
@@ -120,21 +125,21 @@ static struct st7735_function st7735_cfg_script[] = {
 	{ ST7735_DELAY, 100},
 	{ ST7735_CMD, ST7735_NORON},
 	{ ST7735_DELAY, 10},
-	{ ST7735_END, ST7735_END}
-		};
-*/
-static struct fb_fix_screeninfo st7735fb_fix __devinitdata = {
-	.id =		"ST7735", 
+	{ ST7735_END, ST7735_END},
+};
+
+static struct fb_fix_screeninfo st7735fb_fix __initdata = {
+	.id =		"ST7735",
 	.type =		FB_TYPE_PACKED_PIXELS,
 	.visual =	FB_VISUAL_PSEUDOCOLOR,
 	.xpanstep =	0,
 	.ypanstep =	0,
-	.ywrapstep =	0, 
+	.ywrapstep =	0,
 	.line_length =	WIDTH*BPP/8,
 	.accel =	FB_ACCEL_NONE,
 };
 
-static struct fb_var_screeninfo st7735fb_var __devinitdata = {
+static struct fb_var_screeninfo st7735fb_var __initdata = {
 	.xres =			WIDTH,
 	.yres =			HEIGHT,
 	.xres_virtual =		WIDTH,
@@ -152,7 +157,7 @@ static int st7735_write(struct st7735fb_par *par, u8 data)
 	return spi_write(par->spi, &txbuf[0], 1);
 }
 
-static void st7735_write_data(struct st7735fb_par *par, u8 data)
+static int st7735_write_data(struct st7735fb_par *par, u8 data)
 {
 	int ret = 0;
 
@@ -163,6 +168,7 @@ static void st7735_write_data(struct st7735fb_par *par, u8 data)
 	if (ret < 0)
 		pr_err("%s: write data %02x failed with status %d\n",
 			par->info->fix.id, data, ret);
+	return ret;
 }
 
 static int st7735_write_data_buf(struct st7735fb_par *par,
@@ -175,7 +181,7 @@ static int st7735_write_data_buf(struct st7735fb_par *par,
 	return spi_write(par->spi, txbuf, size);
 }
 
-static void st7735_write_cmd(struct st7735fb_par *par, u8 data)
+static int st7735_write_cmd(struct st7735fb_par *par, u8 data)
 {
 	int ret = 0;
 
@@ -186,24 +192,25 @@ static void st7735_write_cmd(struct st7735fb_par *par, u8 data)
 	if (ret < 0)
 		pr_err("%s: write command %02x failed with status %d\n",
 			par->info->fix.id, data, ret);
+	return ret;
 }
 
-static void st7735_run_cfg_script(struct st7735fb_par *par)
+static int st7735_run_cfg_script(struct st7735fb_par *par)
 {
 	int i = 0;
 	int end_script = 0;
+	int ret = 0;
 
 	do {
-		switch (st7735_cfg_script[i].cmd)
-		{
+		switch (st7735_cfg_script[i].cmd) {
 		case ST7735_START:
 			break;
 		case ST7735_CMD:
-			st7735_write_cmd(par,
+			ret = st7735_write_cmd(par,
 				st7735_cfg_script[i].data & 0xff);
 			break;
 		case ST7735_DATA:
-			st7735_write_data(par,
+			ret = st7735_write_data(par,
 				st7735_cfg_script[i].data & 0xff);
 			break;
 		case ST7735_DELAY:
@@ -213,22 +220,20 @@ static void st7735_run_cfg_script(struct st7735fb_par *par)
 			end_script = 1;
 		}
 		i++;
-	} while (!end_script);
+	} while (!end_script && ret >= 0);
+	return ret;
 }
 
 static void st7735_set_addr_win(struct st7735fb_par *par,
 				int xs, int ys, int xe, int ye)
 {
+	uint8_t xsv[4] = {0, xs+2, 0, xe+2};
+	uint8_t ysv[4] = {0, ys+1, 0, ye+1};
+
 	st7735_write_cmd(par, ST7735_CASET);
-	st7735_write_data(par, 0x00);
-	st7735_write_data(par, xs+2);
-	st7735_write_data(par, 0x00);
-	st7735_write_data(par, xe+2);
+	st7735_write_data_buf(par, xsv, 4);
 	st7735_write_cmd(par, ST7735_RASET);
-	st7735_write_data(par, 0x00);
-	st7735_write_data(par, ys+1);
-	st7735_write_data(par, 0x00);
-	st7735_write_data(par, ye+1);
+	st7735_write_data_buf(par, ysv, 4);
 }
 
 static void st7735_reset(struct st7735fb_par *par)
@@ -244,7 +249,6 @@ static void st7735fb_update_display(struct st7735fb_par *par)
 {
 	int ret = 0;
 	u8 *vmem = par->info->screen_base;
-
 	/*
 		TODO:
 		Allow a subset of pages to be passed in
@@ -277,17 +281,15 @@ static int st7735fb_init_display(struct st7735fb_par *par)
 {
 	/* TODO: Need some error checking on gpios */
 
-        /* Request GPIOs and initialize to default values */
-        gpio_request_one(par->rst, GPIOF_OUT_INIT_HIGH,
-			"ST7735 Reset Pin");
-        gpio_request_one(par->dc, GPIOF_OUT_INIT_LOW,
-			"ST7735 Data/Command Pin");
+	/* Request GPIOs and initialize to default values */
+	gpio_request_one(par->rst, GPIOF_OUT_INIT_HIGH,
+		"ST7735 Reset Pin");
+	gpio_request_one(par->dc, GPIOF_OUT_INIT_LOW,
+		"ST7735 Data/Command Pin");
 
 	st7735_reset(par);
 
-	st7735_run_cfg_script(par);
-
-	return 0;
+	return st7735_run_cfg_script(par);
 }
 
 void st7735fb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
@@ -299,7 +301,7 @@ void st7735fb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 	st7735fb_update_display(par);
 }
 
-void st7735fb_copyarea(struct fb_info *info, const struct fb_copyarea *area) 
+void st7735fb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 {
 	struct st7735fb_par *par = info->par;
 
@@ -308,7 +310,7 @@ void st7735fb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 	st7735fb_update_display(par);
 }
 
-void st7735fb_imageblit(struct fb_info *info, const struct fb_image *image) 
+void st7735fb_imageblit(struct fb_info *info, const struct fb_image *image)
 {
 	struct st7735fb_par *par = info->par;
 
@@ -373,7 +375,7 @@ static struct fb_deferred_io st7735fb_defio = {
 	.deferred_io	= st7735fb_deferred_io,
 };
 
-static int __devinit st7735fb_probe (struct spi_device *spi)
+static int __init st7735fb_probe (struct spi_device *spi)
 {
 	int chip = spi_get_device_id(spi)->driver_data;
 	struct st7735fb_platform_data *pdata = spi->dev.platform_data;
@@ -386,12 +388,6 @@ static int __devinit st7735fb_probe (struct spi_device *spi)
 	if (chip != ST7735_DISPLAY_AF_TFT18) {
 		pr_err("%s: only the %s device is supported\n", DRVNAME,
 			to_spi_driver(spi->dev.driver)->id_table->name);
-		return -EINVAL;
-	}
-
-	if (!pdata) {
-		pr_err("%s: platform data required for rst and dc info\n",
-			DRVNAME);
 		return -EINVAL;
 	}
 
@@ -417,20 +413,39 @@ static int __devinit st7735fb_probe (struct spi_device *spi)
 	info->var.blue.length = 5;
 	info->var.transp.offset = 0;
 	info->var.transp.length = 0;
-	info->flags = FBINFO_FLAG_DEFAULT |
-#ifdef __LITTLE_ENDIAN
-			FBINFO_FOREIGN_ENDIAN |
-#endif
-			FBINFO_VIRTFB;
-
+	info->flags = FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
 	info->fbdefio = &st7735fb_defio;
 	fb_deferred_io_init(info);
 
 	par = info->par;
 	par->info = info;
 	par->spi = spi;
+
+#if defined(CONFIG_OF)
+	{
+		struct device_node *np = spi->dev.of_node;
+		par->rst = of_get_named_gpio(np, "st7735fb,dc-gpio", 0);
+		par->dc = of_get_named_gpio(np, "st7735fb,rst-gpio", 0);
+#ifdef __BIG_ENDIAN
+		if (of_get_property(np, "little-endian", NULL))
+			info->flags |= FBINFO_FOREIGN_ENDIAN;
+#else
+		if (of_get_property(np, "big-endian", NULL))
+			info->flags |= FBINFO_FOREIGN_ENDIAN;
+#endif
+	}
+#else
+	if (!pdata) {
+		pr_err("%s: platform data required for rst and dc info\n",
+			DRVNAME);
+		return -EINVAL;
+	}
+
 	par->rst = pdata->rst_gpio;
 	par->dc = pdata->dc_gpio;
+#endif
+
+	printk("%s registering fdev\n", __func__);
 
 	retval = register_framebuffer(info);
 	if (retval < 0)
@@ -462,7 +477,7 @@ fballoc_fail:
 	return retval;
 }
 
-static int __devexit st7735fb_remove(struct spi_device *spi)
+static int __exit st7735fb_remove(struct spi_device *spi)
 {
 	struct fb_info *info = spi_get_drvdata(spi);
 
@@ -470,7 +485,7 @@ static int __devexit st7735fb_remove(struct spi_device *spi)
 
 	if (info) {
 		unregister_framebuffer(info);
-		vfree(info->screen_base);	
+		vfree(info->screen_base);
 		framebuffer_release(info);
 	}
 
@@ -479,8 +494,13 @@ static int __devexit st7735fb_remove(struct spi_device *spi)
 	return 0;
 }
 
+static const struct of_device_id st7735fb_of_id[] = {
+	{ .compatible = "st7735fb", },
+	{ /* sentinel */ }
+};
+
 static const struct spi_device_id st7735fb_ids[] = {
-	{ "adafruit_tft18", ST7735_DISPLAY_AF_TFT18 },
+	{ "st7735fb", ST7735_DISPLAY_AF_TFT18 },
 	{ },
 };
 
@@ -490,10 +510,11 @@ static struct spi_driver st7735fb_driver = {
 	.driver = {
 		.name   = "st7735fb",
 		.owner  = THIS_MODULE,
+		.of_match_table = st7735fb_of_id,
 	},
 	.id_table = st7735fb_ids,
 	.probe  = st7735fb_probe,
-	.remove = __devexit_p(st7735fb_remove),
+	.remove = st7735fb_remove,
 };
 
 static int __init st7735fb_init(void)

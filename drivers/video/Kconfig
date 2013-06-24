@@ -23,6 +23,8 @@ source "drivers/gpu/drm/Kconfig"
 
 source "drivers/gpu/stub/Kconfig"
 
+source "drivers/video/fbtft/Kconfig"
+
 config VGASTATE
        tristate
        default n
@@ -2408,19 +2410,6 @@ config FB_MXS
 	help
 	  Framebuffer support for the MXS SoC.
 
-config FB_ST7735
-	tristate "ST7735 framebuffer support"
-	depends on FB && SPI
-	select FB_SYS_FILLRECT
-	select FB_SYS_COPYAREA
-	select FB_SYS_IMAGEBLIT
-	select FB_SYS_FOPS
-	select FB_DEFERRED_IO
-	help
-	  Framebuffer support for the ST7735 display controller in SPI mode.
-
-
-
 config FB_PUV3_UNIGFX
 	tristate "PKUnity v3 Unigfx framebuffer support"
 	depends on FB && UNICORE32 && ARCH_PUV3
@@ -2431,6 +2420,17 @@ config FB_PUV3_UNIGFX
 	help
 	  Choose this option if you want to use the Unigfx device as a
 	  framebuffer device. Without the support of PCI & AGP.
+
+config FB_ST7735
+	tristate "ST7735 framebuffer support"
+	depends on FB && SPI
+	select FB_SYS_FILLRECT
+	select FB_SYS_COPYAREA
+	select FB_SYS_IMAGEBLIT
+	select FB_SYS_FOPS
+	select FB_DEFERRED_IO
+	help
+	  Framebuffer support for the ST7735 display controller in SPI mode.
 
 source "drivers/video/omap/Kconfig"
 source "drivers/video/omap2/Kconfig"
