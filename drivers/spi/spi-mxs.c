@@ -586,18 +586,7 @@ static int mxs_spi_probe(struct platform_device *pdev)
 	master = spi_alloc_master(&pdev->dev, sizeof(*spi));
 	if (!master)
 		return -ENOMEM;
-	//master->bus_num = bus_num;
-//	
-	if (pdev->id != -1)
-		master->bus_num = pdev->id;
-	if (np) {
-		unsigned long prop;
-
-		of_property_read_u32(np, "cell-index", &prop);
-		master->bus_num = prop;
-	}
-
-//	
+	master->bus_num = bus_num;
 	master->transfer_one_message = mxs_spi_transfer_one;
 	master->setup = mxs_spi_setup;
 	master->mode_bits = SPI_CPOL | SPI_CPHA;

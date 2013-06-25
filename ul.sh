@@ -9,7 +9,7 @@ rm -rf /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot/zImage
 rm -rf /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot/uImage
 
 cp arch/arm/boot/uImage /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot
-#cp arch/arm/boot/zImage /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot
+cp arch/arm/boot/zImage /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot
 cp drivers/spi/*.ko /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot
 cp drivers/video/fbtft/*.ko /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot
 cp drivers/video/*.ko /media/aaron/3bc0b08a-9d2a-4717-b3af-625685ab031d/boot
