@@ -23,7 +23,7 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/sunxi_timer.h>
-#include <linux/clk/sunxi.h>
+#include <linux/clk-provider.h>
 
 #define TIMER_CTL_REG		0x00
 #define TIMER_CTL_ENABLE		(1 << 0)
@@ -103,7 +103,7 @@ static struct of_device_id sunxi_timer_dt_ids[] = {
 	{ }
 };
 
-static void __init sunxi_timer_init(void)
+void __init sunxi_timer_init(void)
 {
 	struct device_node *node;
 	unsigned long rate = 0;
@@ -123,7 +123,7 @@ static void __init sunxi_timer_init(void)
 	if (irq <= 0)
 		panic("Can't parse IRQ");
 
-	sunxi_init_clocks();
+	of_clk_init(NULL);
 
 	clk = of_clk_get(node, 0);
 	if (IS_ERR(clk))
@@ -158,7 +158,3 @@ static void __init sunxi_timer_init(void)
 	clockevents_config_and_register(&sunxi_clockevent, rate / TIMER_SCAL,
 					0x1, 0xff);
 }
-
-struct sys_timer sunxi_timer = {
-	.init = sunxi_timer_init,
-};

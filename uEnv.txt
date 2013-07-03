@@ -1,0 +1,21 @@
+dtb_file=imx23-olinuxino.dtb
+ 
+initrd_high=0xffffffff
+fdt_high=0xffffffff
+ 
+console=ttyAMA0,115200
+ 
+mmcroot=/dev/mmcblk0p2 ro
+mmcrootfstype=ext4 rootwait fixrtc
+ 
+optargs=console=tty0
+ 
+mmc_load_image=load mmc 0:2 0x42000000 /boot/zImage
+mmc_load_initrd=load mmc 0:2 0x43000000 /boot/initrd.img; setenv initrd_size ${filesize}
+mmc_load_dtb=load mmc 0:2 0x41000000 /boot/dtbs/${dtb_file}
+ 
+mmcargs=setenv bootargs console=${console} ${optargs} root=${mmcroot} rootfstype=${mmcrootfstype} ${video}
+ 
+#Just: zImage
+xyz_mmcboot=run mmc_load_image; run mmc_load_dtb; echo Booting from mmc ...
+loaduimage=run xyz_mmcboot; run mmcargs; bootz 0x42000000 - 0x41000000

@@ -85,14 +85,14 @@ struct psb_intel_limit_t {
 #define I9XX_DOT_MAX		 400000
 #define I9XX_VCO_MIN		1400000
 #define I9XX_VCO_MAX		2800000
-#define I9XX_N_MIN		      3
-#define I9XX_N_MAX		      8
+#define I9XX_N_MIN		      1
+#define I9XX_N_MAX		      6
 #define I9XX_M_MIN		     70
 #define I9XX_M_MAX		    120
-#define I9XX_M1_MIN		     10
-#define I9XX_M1_MAX		     20
-#define I9XX_M2_MIN		      5
-#define I9XX_M2_MAX		      9
+#define I9XX_M1_MIN		      8
+#define I9XX_M1_MAX		     18
+#define I9XX_M2_MIN		      3
+#define I9XX_M2_MAX		      7
 #define I9XX_P_SDVO_DAC_MIN	      5
 #define I9XX_P_SDVO_DAC_MAX	     80
 #define I9XX_P_LVDS_MIN		      7
@@ -1246,6 +1246,19 @@ void psb_intel_crtc_destroy(struct drm_crtc *crtc)
 	kfree(psb_intel_crtc);
 }
 
+static void psb_intel_crtc_disable(struct drm_crtc *crtc)
+{
+	struct gtt_range *gt;
+	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
+
+	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
+
+	if (crtc->fb) {
+		gt = to_psb_fb(crtc->fb)->gtt;
+		psb_gtt_unpin(gt);
+	}
+}
+
 const struct drm_crtc_helper_funcs psb_intel_helper_funcs = {
 	.dpms = psb_intel_crtc_dpms,
 	.mode_fixup = psb_intel_crtc_mode_fixup,
@@ -1253,6 +1266,7 @@ const struct drm_crtc_helper_funcs psb_intel_helper_funcs = {
 	.mode_set_base = psb_intel_pipe_set_base,
 	.prepare = psb_intel_crtc_prepare,
 	.commit = psb_intel_crtc_commit,
+	.disable = psb_intel_crtc_disable,
 };
 
 const struct drm_crtc_funcs psb_intel_crtc_funcs = {

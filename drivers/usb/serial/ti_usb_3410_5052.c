@@ -120,8 +120,8 @@ static void ti_interrupt_callback(struct urb *urb);
 static void ti_bulk_in_callback(struct urb *urb);
 static void ti_bulk_out_callback(struct urb *urb);
 
-static void ti_recv(struct device *dev, struct tty_struct *tty,
-	unsigned char *data, int length);
+static void ti_recv(struct usb_serial_port *port, unsigned char *data,
+		int length);
 static void ti_send(struct ti_port *tport);
 static int ti_set_mcr(struct ti_port *tport, unsigned int mcr);
 static int ti_get_lsr(struct ti_port *tport);
@@ -178,7 +178,8 @@ static struct usb_device_id ti_id_table_3410[15+TI_EXTRA_VID_PID_COUNT+1] = {
 	{ USB_DEVICE(IBM_VENDOR_ID, IBM_4543_PRODUCT_ID) },
 	{ USB_DEVICE(IBM_VENDOR_ID, IBM_454B_PRODUCT_ID) },
 	{ USB_DEVICE(IBM_VENDOR_ID, IBM_454C_PRODUCT_ID) },
-	{ USB_DEVICE(ABBOTT_VENDOR_ID, ABBOTT_PRODUCT_ID) },
+	{ USB_DEVICE(ABBOTT_VENDOR_ID, ABBOTT_STEREO_PLUG_ID) },
+	{ USB_DEVICE(ABBOTT_VENDOR_ID, ABBOTT_STRIP_PORT_ID) },
 	{ USB_DEVICE(TI_VENDOR_ID, FRI2_PRODUCT_ID) },
 };
 
@@ -1120,7 +1121,6 @@ static void ti_bulk_in_callback(struct urb *urb)
 	struct device *dev = &urb->dev->dev;
 	int status = urb->status;
 	int retval = 0;
-	struct tty_struct *tty;
 
 	switch (status) {
 	case 0:
@@ -1147,24 +1147,18 @@ static void ti_bulk_in_callback(struct urb *urb)
 		return;
 	}
 
-	tty = tty_port_tty_get(&port->port);
-	if (tty) {
-		if (urb->actual_length) {
-			usb_serial_debug_data(dev, __func__, urb->actual_length,
-					      urb->transfer_buffer);
+	if (urb->actual_length) {
+		usb_serial_debug_data(dev, __func__, urb->actual_length,
+				      urb->transfer_buffer);
 
-			if (!tport->tp_is_open)
-				dev_dbg(dev, "%s - port closed, dropping data\n",
-					__func__);
-			else
-				ti_recv(&urb->dev->dev, tty,
-						urb->transfer_buffer,
-						urb->actual_length);
-			spin_lock(&tport->tp_lock);
-			tport->tp_icount.rx += urb->actual_length;
-			spin_unlock(&tport->tp_lock);
-		}
-		tty_kref_put(tty);
+		if (!tport->tp_is_open)
+			dev_dbg(dev, "%s - port closed, dropping data\n",
+				__func__);
+		else
+			ti_recv(port, urb->transfer_buffer, urb->actual_length);
+		spin_lock(&tport->tp_lock);
+		tport->tp_icount.rx += urb->actual_length;
+		spin_unlock(&tport->tp_lock);
 	}
 
 exit:
@@ -1212,24 +1206,23 @@ static void ti_bulk_out_callback(struct urb *urb)
 }
 
 
-static void ti_recv(struct device *dev, struct tty_struct *tty,
-	unsigned char *data, int length)
+static void ti_recv(struct usb_serial_port *port, unsigned char *data,
+		int length)
 {
 	int cnt;
 
 	do {
-		cnt = tty_insert_flip_string(tty, data, length);
+		cnt = tty_insert_flip_string(&port->port, data, length);
 		if (cnt < length) {
-			dev_err(dev, "%s - dropping data, %d bytes lost\n",
+			dev_err(&port->dev, "%s - dropping data, %d bytes lost\n",
 						__func__, length - cnt);
 			if (cnt == 0)
 				break;
 		}
-		tty_flip_buffer_push(tty);
+		tty_flip_buffer_push(&port->port);
 		data += cnt;
 		length -= cnt;
 	} while (length > 0);
-
 }
 
 

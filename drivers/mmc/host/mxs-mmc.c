@@ -72,8 +72,6 @@ struct mxs_mmc_host {
 	int				sdio_irq_en;
 	int				wp_gpio;
 	bool				wp_inverted;
-	bool				cd_inverted;
-	bool				non_removable;
 };
 
 static int mxs_mmc_get_ro(struct mmc_host *mmc)
@@ -97,9 +95,11 @@ static int mxs_mmc_get_cd(struct mmc_host *mmc)
 	struct mxs_mmc_host *host = mmc_priv(mmc);
 	struct mxs_ssp *ssp = &host->ssp;
 
-	return host->non_removable ||
-		!(readl(ssp->base + HW_SSP_STATUS(ssp)) &
-		  BM_SSP_STATUS_CARD_DETECT) ^ host->cd_inverted;
+	if (mmc->caps & MMC_CAP_NONREMOVABLE)
+		return 1;
+
+	return !(readl(ssp->base + HW_SSP_STATUS(ssp)) &
+		 BM_SSP_STATUS_CARD_DETECT);
 }
 
 static void mxs_mmc_reset(struct mxs_mmc_host *host)
@@ -357,7 +357,7 @@ static void mxs_mmc_adtc(struct mxs_mmc_host *host)
 	struct dma_async_tx_descriptor *desc;
 	struct scatterlist *sgl = data->sg, *sg;
 	unsigned int sg_len = data->sg_len;
-	int i;
+	unsigned int i;
 
 	unsigned short dma_data_dir, timeout;
 	enum dma_transfer_direction slave_dirn;
@@ -617,9 +617,9 @@ static int mxs_mmc_probe(struct platform_device *pdev)
 	host = mmc_priv(mmc);
 	ssp = &host->ssp;
 	ssp->dev = &pdev->dev;
-	ssp->base = devm_request_and_ioremap(&pdev->dev, iores);
-	if (!ssp->base) {
-		ret = -EADDRNOTAVAIL;
+	ssp->base = devm_ioremap_resource(&pdev->dev, iores);
+	if (IS_ERR(ssp->base)) {
+		ret = PTR_ERR(ssp->base);
 		goto out_mmc_free;
 	}
 
@@ -689,15 +689,13 @@ static int mxs_mmc_probe(struct platform_device *pdev)
 		mmc->caps |= MMC_CAP_4_BIT_DATA;
 	else if (bus_width == 8)
 		mmc->caps |= MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA;
-	host->non_removable = of_property_read_bool(np, "non-removable") |
-		of_property_read_bool(np, "broken-cd");
-	if (host->non_removable)
-		mmc->caps |= MMC_CAP_NONREMOVABLE;
 	host->wp_gpio = of_get_named_gpio_flags(np, "wp-gpios", 0, &flags);
+
 	if (flags & OF_GPIO_ACTIVE_LOW)
 		host->wp_inverted = 1;
 
-	host->cd_inverted = of_property_read_bool(np, "cd-inverted");
+	if (of_find_property(np, "non-removable", NULL))
+		mmc->caps |= MMC_CAP_NONREMOVABLE;
 
 	mmc->f_min = 400000;
 	mmc->f_max = 288000000;
@@ -812,3 +810,4 @@ module_platform_driver(mxs_mmc_driver);
 MODULE_DESCRIPTION("FREESCALE MXS MMC peripheral");
 MODULE_AUTHOR("Freescale Semiconductor");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:" DRIVER_NAME);

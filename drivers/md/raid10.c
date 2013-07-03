@@ -38,21 +38,36 @@
  *    near_copies (stored in low byte of layout)
  *    far_copies (stored in second byte of layout)
  *    far_offset (stored in bit 16 of layout )
+ *    use_far_sets (stored in bit 17 of layout )
  *
- * The data to be stored is divided into chunks using chunksize.
- * Each device is divided into far_copies sections.
- * In each section, chunks are laid out in a style similar to raid0, but
- * near_copies copies of each chunk is stored (each on a different drive).
- * The starting device for each section is offset near_copies from the starting
- * device of the previous section.
- * Thus they are (near_copies*far_copies) of each chunk, and each is on a different
- * drive.
- * near_copies and far_copies must be at least one, and their product is at most
- * raid_disks.
+ * The data to be stored is divided into chunks using chunksize.  Each device
+ * is divided into far_copies sections.   In each section, chunks are laid out
+ * in a style similar to raid0, but near_copies copies of each chunk is stored
+ * (each on a different drive).  The starting device for each section is offset
+ * near_copies from the starting device of the previous section.  Thus there
+ * are (near_copies * far_copies) of each chunk, and each is on a different
+ * drive.  near_copies and far_copies must be at least one, and their product
+ * is at most raid_disks.
  *
  * If far_offset is true, then the far_copies are handled a bit differently.
- * The copies are still in different stripes, but instead of be very far apart
- * on disk, there are adjacent stripes.
+ * The copies are still in different stripes, but instead of being very far
+ * apart on disk, there are adjacent stripes.
+ *
+ * The far and offset algorithms are handled slightly differently if
+ * 'use_far_sets' is true.  In this case, the array's devices are grouped into
+ * sets that are (near_copies * far_copies) in size.  The far copied stripes
+ * are still shifted by 'near_copies' devices, but this shifting stays confined
+ * to the set rather than the entire array.  This is done to improve the number
+ * of device combinations that can fail without causing the array to fail.
+ * Example 'far' algorithm w/o 'use_far_sets' (each letter represents a chunk
+ * on a device):
+ *    A B C D    A B C D E
+ *      ...         ...
+ *    D A B C    E A B C D
+ * Example 'far' algorithm w/ 'use_far_sets' enabled (sets illustrated w/ []'s):
+ *    [A B] [C D]    [A B] [C D E]
+ *    |...| |...|    |...| | ... |
+ *    [B A] [D C]    [B A] [E C D]
  */
 
 /*
@@ -475,7 +490,17 @@ static void raid10_end_write_request(struct bio *bio, int error)
 		sector_t first_bad;
 		int bad_sectors;
 
-		set_bit(R10BIO_Uptodate, &r10_bio->state);
+		/*
+		 * Do not set R10BIO_Uptodate if the current device is
+		 * rebuilding or Faulty. This is because we cannot use
+		 * such device for properly reading the data back (we could
+		 * potentially use it, if the current write would have felt
+		 * before rdev->recovery_offset, but for simplicity we don't
+		 * check this here.
+		 */
+		if (test_bit(In_sync, &rdev->flags) &&
+		    !test_bit(Faulty, &rdev->flags))
+			set_bit(R10BIO_Uptodate, &r10_bio->state);
 
 		/* Maybe we can clear some bad blocks. */
 		if (is_badblock(rdev,
@@ -535,6 +560,13 @@ static void __raid10_find_phys(struct geom *geo, struct r10bio *r10bio)
 	sector_t stripe;
 	int dev;
 	int slot = 0;
+	int last_far_set_start, last_far_set_size;
+
+	last_far_set_start = (geo->raid_disks / geo->far_set_size) - 1;
+	last_far_set_start *= geo->far_set_size;
+
+	last_far_set_size = geo->far_set_size;
+	last_far_set_size += (geo->raid_disks % geo->far_set_size);
 
 	/* now calculate first sector/dev */
 	chunk = r10bio->sector >> geo->chunk_shift;
@@ -551,15 +583,25 @@ static void __raid10_find_phys(struct geom *geo, struct r10bio *r10bio)
 	/* and calculate all the others */
 	for (n = 0; n < geo->near_copies; n++) {
 		int d = dev;
+		int set;
 		sector_t s = sector;
-		r10bio->devs[slot].addr = sector;
 		r10bio->devs[slot].devnum = d;
+		r10bio->devs[slot].addr = s;
 		slot++;
 
 		for (f = 1; f < geo->far_copies; f++) {
+			set = d / geo->far_set_size;
 			d += geo->near_copies;
-			if (d >= geo->raid_disks)
-				d -= geo->raid_disks;
+
+			if ((geo->raid_disks % geo->far_set_size) &&
+			    (d > last_far_set_start)) {
+				d -= last_far_set_start;
+				d %= last_far_set_size;
+				d += last_far_set_start;
+			} else {
+				d %= geo->far_set_size;
+				d += geo->far_set_size * set;
+			}
 			s += geo->stride;
 			r10bio->devs[slot].devnum = d;
 			r10bio->devs[slot].addr = s;
@@ -595,6 +637,20 @@ static sector_t raid10_find_virt(struct r10conf *conf, sector_t sector, int dev)
 	 * or recovery, so reshape isn't happening
 	 */
 	struct geom *geo = &conf->geo;
+	int far_set_start = (dev / geo->far_set_size) * geo->far_set_size;
+	int far_set_size = geo->far_set_size;
+	int last_far_set_start;
+
+	if (geo->raid_disks % geo->far_set_size) {
+		last_far_set_start = (geo->raid_disks / geo->far_set_size) - 1;
+		last_far_set_start *= geo->far_set_size;
+
+		if (dev >= last_far_set_start) {
+			far_set_size = geo->far_set_size;
+			far_set_size += (geo->raid_disks % geo->far_set_size);
+			far_set_start = last_far_set_start;
+		}
+	}
 
 	offset = sector & geo->chunk_mask;
 	if (geo->far_offset) {
@@ -602,13 +658,13 @@ static sector_t raid10_find_virt(struct r10conf *conf, sector_t sector, int dev)
 		chunk = sector >> geo->chunk_shift;
 		fc = sector_div(chunk, geo->far_copies);
 		dev -= fc * geo->near_copies;
-		if (dev < 0)
-			dev += geo->raid_disks;
+		if (dev < far_set_start)
+			dev += far_set_size;
 	} else {
 		while (sector >= geo->stride) {
 			sector -= geo->stride;
-			if (dev < geo->near_copies)
-				dev += geo->raid_disks - geo->near_copies;
+			if (dev < (geo->near_copies + far_set_start))
+				dev += far_set_size - geo->near_copies;
 			else
 				dev -= geo->near_copies;
 		}
@@ -1009,17 +1065,17 @@ static void allow_barrier(struct r10conf *conf)
 	wake_up(&conf->wait_barrier);
 }
 
-static void freeze_array(struct r10conf *conf)
+static void freeze_array(struct r10conf *conf, int extra)
 {
 	/* stop syncio and normal IO and wait for everything to
 	 * go quiet.
 	 * We increment barrier and nr_waiting, and then
-	 * wait until nr_pending match nr_queued+1
+	 * wait until nr_pending match nr_queued+extra
 	 * This is called in the context of one normal IO request
 	 * that has failed. Thus any sync request that might be pending
 	 * will be blocked by nr_pending, and we need to wait for
 	 * pending IO requests to complete or be queued for re-try.
-	 * Thus the number queued (nr_queued) plus this request (1)
+	 * Thus the number queued (nr_queued) plus this request (extra)
 	 * must match the number of pending IOs (nr_pending) before
 	 * we continue.
 	 */
@@ -1027,7 +1083,7 @@ static void freeze_array(struct r10conf *conf)
 	conf->barrier++;
 	conf->nr_waiting++;
 	wait_event_lock_irq_cmd(conf->wait_barrier,
-				conf->nr_pending == conf->nr_queued+1,
+				conf->nr_pending == conf->nr_queued+extra,
 				conf->resync_lock,
 				flush_pending_writes(conf));
 
@@ -1793,8 +1849,8 @@ static int raid10_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 		 * we wait for all outstanding requests to complete.
 		 */
 		synchronize_sched();
-		raise_barrier(conf, 0);
-		lower_barrier(conf);
+		freeze_array(conf, 0);
+		unfreeze_array(conf);
 		clear_bit(Unmerged, &rdev->flags);
 	}
 	md_integrity_add_rdev(rdev, mddev);
@@ -2590,7 +2646,7 @@ static void handle_read_error(struct mddev *mddev, struct r10bio *r10_bio)
 	r10_bio->devs[slot].bio = NULL;
 
 	if (mddev->ro == 0) {
-		freeze_array(conf);
+		freeze_array(conf, 1);
 		fix_read_error(conf, mddev, r10_bio);
 		unfreeze_array(conf);
 	} else
@@ -3445,7 +3501,7 @@ static int setup_geo(struct geom *geo, struct mddev *mddev, enum geo_type new)
 		disks = mddev->raid_disks + mddev->delta_disks;
 		break;
 	}
-	if (layout >> 17)
+	if (layout >> 18)
 		return -1;
 	if (chunk < (PAGE_SIZE >> 9) ||
 	    !is_power_of_2(chunk))
@@ -3457,6 +3513,7 @@ static int setup_geo(struct geom *geo, struct mddev *mddev, enum geo_type new)
 	geo->near_copies = nc;
 	geo->far_copies = fc;
 	geo->far_offset = fo;
+	geo->far_set_size = (layout & (1<<17)) ? disks / fc : disks;
 	geo->chunk_mask = chunk - 1;
 	geo->chunk_shift = ffz(~chunk);
 	return nc*fc;
@@ -3578,8 +3635,7 @@ static int run(struct mddev *mddev)
 	if (mddev->queue) {
 		blk_queue_max_discard_sectors(mddev->queue,
 					      mddev->chunk_sectors);
-		blk_queue_max_write_same_sectors(mddev->queue,
-						 mddev->chunk_sectors);
+		blk_queue_max_write_same_sectors(mddev->queue, 0);
 		blk_queue_io_min(mddev->queue, chunk_size);
 		if (conf->geo.raid_disks % conf->geo.near_copies)
 			blk_queue_io_opt(mddev->queue, chunk_size * conf->geo.raid_disks);

@@ -282,7 +282,7 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 
 	show_regs(regs);
 	dump_stack();
-	add_taint(TAINT_DIE);
+	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);
 
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
@@ -652,6 +652,7 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 	case 14:
 		/* Assist Exception Trap, i.e. floating point exception. */
 		die_if_kernel("Floating point exception", regs, 0); /* quiet */
+		__inc_irq_stat(irq_fpassist_count);
 		handle_fpe(regs);
 		return;
 		

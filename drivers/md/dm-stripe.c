@@ -94,7 +94,7 @@ static int get_stripe(struct dm_target *ti, struct stripe_c *sc,
 static int stripe_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	struct stripe_c *sc;
-	sector_t width;
+	sector_t width, tmp_len;
 	uint32_t stripes;
 	uint32_t chunk_size;
 	int r;
@@ -116,15 +116,16 @@ static int stripe_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	width = ti->len;
-	if (sector_div(width, chunk_size)) {
-		ti->error = "Target length not divisible by "
-		    "chunk size";
-		return -EINVAL;
-	}
-
 	if (sector_div(width, stripes)) {
 		ti->error = "Target length not divisible by "
 		    "number of stripes";
+		return -EINVAL;
+	}
+
+	tmp_len = width;
+	if (sector_div(tmp_len, chunk_size)) {
+		ti->error = "Target length not divisible by "
+		    "chunk size";
 		return -EINVAL;
 	}
 
@@ -160,9 +161,9 @@ static int stripe_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	if (r)
 		return r;
 
-	ti->num_flush_requests = stripes;
-	ti->num_discard_requests = stripes;
-	ti->num_write_same_requests = stripes;
+	ti->num_flush_bios = stripes;
+	ti->num_discard_bios = stripes;
+	ti->num_write_same_bios = stripes;
 
 	sc->chunk_size = chunk_size;
 	if (chunk_size & (chunk_size - 1))
@@ -276,19 +277,19 @@ static int stripe_map(struct dm_target *ti, struct bio *bio)
 {
 	struct stripe_c *sc = ti->private;
 	uint32_t stripe;
-	unsigned target_request_nr;
+	unsigned target_bio_nr;
 
 	if (bio->bi_rw & REQ_FLUSH) {
-		target_request_nr = dm_bio_get_target_request_nr(bio);
-		BUG_ON(target_request_nr >= sc->stripes);
-		bio->bi_bdev = sc->stripe[target_request_nr].dev->bdev;
+		target_bio_nr = dm_bio_get_target_bio_nr(bio);
+		BUG_ON(target_bio_nr >= sc->stripes);
+		bio->bi_bdev = sc->stripe[target_bio_nr].dev->bdev;
 		return DM_MAPIO_REMAPPED;
 	}
 	if (unlikely(bio->bi_rw & REQ_DISCARD) ||
 	    unlikely(bio->bi_rw & REQ_WRITE_SAME)) {
-		target_request_nr = dm_bio_get_target_request_nr(bio);
-		BUG_ON(target_request_nr >= sc->stripes);
-		return stripe_map_range(sc, bio, target_request_nr);
+		target_bio_nr = dm_bio_get_target_bio_nr(bio);
+		BUG_ON(target_bio_nr >= sc->stripes);
+		return stripe_map_range(sc, bio, target_bio_nr);
 	}
 
 	stripe_map_sector(sc, bio->bi_sector, &stripe, &bio->bi_sector);

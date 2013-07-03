@@ -314,7 +314,6 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
 	struct spcp8x5_private *priv = usb_get_serial_port_data(port);
 	unsigned long flags;
 	unsigned int cflag = tty->termios.c_cflag;
-	unsigned int old_cflag = old_termios->c_cflag;
 	unsigned short uartdata;
 	unsigned char buf[2] = {0, 0};
 	int baud;
@@ -323,15 +322,15 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
 
 
 	/* check that they really want us to change something */
-	if (!tty_termios_hw_change(&tty->termios, old_termios))
+	if (old_termios && !tty_termios_hw_change(&tty->termios, old_termios))
 		return;
 
 	/* set DTR/RTS active */
 	spin_lock_irqsave(&priv->lock, flags);
 	control = priv->line_control;
-	if ((old_cflag & CBAUD) == B0) {
+	if (old_termios && (old_termios->c_cflag & CBAUD) == B0) {
 		priv->line_control |= MCR_DTR;
-		if (!(old_cflag & CRTSCTS))
+		if (!(old_termios->c_cflag & CRTSCTS))
 			priv->line_control |= MCR_RTS;
 	}
 	if (control != priv->line_control) {
@@ -421,7 +420,6 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
  * status of the device. */
 static int spcp8x5_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
-	struct ktermios tmp_termios;
 	struct usb_serial *serial = port->serial;
 	struct spcp8x5_private *priv = usb_get_serial_port_data(port);
 	int ret;
@@ -442,7 +440,7 @@ static int spcp8x5_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 	/* Setup termios */
 	if (tty)
-		spcp8x5_set_termios(tty, port, &tmp_termios);
+		spcp8x5_set_termios(tty, port, NULL);
 
 	spcp8x5_get_msr(serial->dev, &status, priv->type);
 
@@ -460,7 +458,6 @@ static void spcp8x5_process_read_urb(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
 	struct spcp8x5_private *priv = usb_get_serial_port_data(port);
-	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 	unsigned long flags;
 	u8 status;
@@ -479,9 +476,6 @@ static void spcp8x5_process_read_urb(struct urb *urb)
 	if (!urb->actual_length)
 		return;
 
-	tty = tty_port_tty_get(&port->port);
-	if (!tty)
-		return;
 
 	if (status & UART_STATE_TRANSIENT_MASK) {
 		/* break takes precedence over parity, which takes precedence
@@ -496,17 +490,21 @@ static void spcp8x5_process_read_urb(struct urb *urb)
 
 		/* overrun is special, not associated with a char */
 		if (status & UART_OVERRUN_ERROR)
-			tty_insert_flip_char(tty, 0, TTY_OVERRUN);
+			tty_insert_flip_char(&port->port, 0, TTY_OVERRUN);
 
-		if (status & UART_DCD)
-			usb_serial_handle_dcd_change(port, tty,
-				   priv->line_status & MSR_STATUS_LINE_DCD);
+		if (status & UART_DCD) {
+			struct tty_struct *tty = tty_port_tty_get(&port->port);
+			if (tty) {
+				usb_serial_handle_dcd_change(port, tty,
+				       priv->line_status & MSR_STATUS_LINE_DCD);
+				tty_kref_put(tty);
+			}
+		}
 	}
 
-	tty_insert_flip_string_fixed_flag(tty, data, tty_flag,
+	tty_insert_flip_string_fixed_flag(&port->port, data, tty_flag,
 							urb->actual_length);
-	tty_flip_buffer_push(tty);
-	tty_kref_put(tty);
+	tty_flip_buffer_push(&port->port);
 }
 
 static int spcp8x5_wait_modem_info(struct usb_serial_port *port,

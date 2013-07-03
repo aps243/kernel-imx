@@ -700,10 +700,22 @@ retry:
 
 static void iommu_poll_events(struct amd_iommu *iommu)
 {
-	u32 head, tail;
+	u32 head, tail, status;
 	unsigned long flags;
 
 	spin_lock_irqsave(&iommu->lock, flags);
+
+	/* enable event interrupts again */
+	do {
+		/*
+		 * Workaround for Erratum ERBT1312
+		 * Clearing the EVT_INT bit may race in the hardware, so read
+		 * it again and make sure it was really cleared
+		 */
+		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
+		writel(MMIO_STATUS_EVT_INT_MASK,
+		       iommu->mmio_base + MMIO_STATUS_OFFSET);
+	} while (status & MMIO_STATUS_EVT_INT_MASK);
 
 	head = readl(iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
 	tail = readl(iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
@@ -741,15 +753,24 @@ static void iommu_handle_ppr_entry(struct amd_iommu *iommu, u64 *raw)
 static void iommu_poll_ppr_log(struct amd_iommu *iommu)
 {
 	unsigned long flags;
-	u32 head, tail;
+	u32 head, tail, status;
 
 	if (iommu->ppr_log == NULL)
 		return;
 
-	/* enable ppr interrupts again */
-	writel(MMIO_STATUS_PPR_INT_MASK, iommu->mmio_base + MMIO_STATUS_OFFSET);
-
 	spin_lock_irqsave(&iommu->lock, flags);
+
+	/* enable ppr interrupts again */
+	do {
+		/*
+		 * Workaround for Erratum ERBT1312
+		 * Clearing the PPR_INT bit may race in the hardware, so read
+		 * it again and make sure it was really cleared
+		 */
+		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
+		writel(MMIO_STATUS_PPR_INT_MASK,
+		       iommu->mmio_base + MMIO_STATUS_OFFSET);
+	} while (status & MMIO_STATUS_PPR_INT_MASK);
 
 	head = readl(iommu->mmio_base + MMIO_PPR_HEAD_OFFSET);
 	tail = readl(iommu->mmio_base + MMIO_PPR_TAIL_OFFSET);
@@ -3185,8 +3206,7 @@ int __init amd_iommu_init_dma_ops(void)
 free_domains:
 
 	for_each_iommu(iommu) {
-		if (iommu->default_dom)
-			dma_ops_domain_free(iommu->default_dom);
+		dma_ops_domain_free(iommu->default_dom);
 	}
 
 	return ret;
@@ -4018,10 +4038,10 @@ static int alloc_irq_index(struct irq_cfg *cfg, u16 devid, int count)
 
 			index -= count - 1;
 
+			cfg->remapped	      = 1;
 			irte_info             = &cfg->irq_2_iommu;
 			irte_info->sub_handle = devid;
 			irte_info->irte_index = index;
-			irte_info->iommu      = (void *)cfg;
 
 			goto out;
 		}
@@ -4128,9 +4148,9 @@ static int setup_ioapic_entry(int irq, struct IO_APIC_route_entry *entry,
 	index = attr->ioapic_pin;
 
 	/* Setup IRQ remapping info */
+	cfg->remapped	      = 1;
 	irte_info->sub_handle = devid;
 	irte_info->irte_index = index;
-	irte_info->iommu      = (void *)cfg;
 
 	/* Setup IRTE for IOMMU */
 	irte.val		= 0;
@@ -4289,9 +4309,9 @@ static int msi_setup_irq(struct pci_dev *pdev, unsigned int irq,
 	devid		= get_device_id(&pdev->dev);
 	irte_info	= &cfg->irq_2_iommu;
 
+	cfg->remapped	      = 1;
 	irte_info->sub_handle = devid;
 	irte_info->irte_index = index + offset;
-	irte_info->iommu      = (void *)cfg;
 
 	return 0;
 }
@@ -4315,9 +4335,9 @@ static int setup_hpet_msi(unsigned int irq, unsigned int id)
 	if (index < 0)
 		return index;
 
+	cfg->remapped	      = 1;
 	irte_info->sub_handle = devid;
 	irte_info->irte_index = index;
-	irte_info->iommu      = (void *)cfg;
 
 	return 0;
 }

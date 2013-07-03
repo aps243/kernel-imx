@@ -283,7 +283,7 @@ static void pl2303_set_termios(struct tty_struct *tty,
 	   serial settings even to the same values as before. Thus
 	   we actually need to filter in this specific case */
 
-	if (!tty_termios_hw_change(&tty->termios, old_termios))
+	if (old_termios && !tty_termios_hw_change(&tty->termios, old_termios))
 		return;
 
 	cflag = tty->termios.c_cflag;
@@ -292,7 +292,8 @@ static void pl2303_set_termios(struct tty_struct *tty,
 	if (!buf) {
 		dev_err(&port->dev, "%s - out of memory.\n", __func__);
 		/* Report back no change occurred */
-		tty->termios = *old_termios;
+		if (old_termios)
+			tty->termios = *old_termios;
 		return;
 	}
 
@@ -432,7 +433,7 @@ static void pl2303_set_termios(struct tty_struct *tty,
 	control = priv->line_control;
 	if ((cflag & CBAUD) == B0)
 		priv->line_control &= ~(CONTROL_DTR | CONTROL_RTS);
-	else if ((old_termios->c_cflag & CBAUD) == B0)
+	else if (old_termios && (old_termios->c_cflag & CBAUD) == B0)
 		priv->line_control |= (CONTROL_DTR | CONTROL_RTS);
 	if (control != priv->line_control) {
 		control = priv->line_control;
@@ -491,7 +492,6 @@ static void pl2303_close(struct usb_serial_port *port)
 
 static int pl2303_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
-	struct ktermios tmp_termios;
 	struct usb_serial *serial = port->serial;
 	struct pl2303_serial_private *spriv = usb_get_serial_data(serial);
 	int result;
@@ -507,7 +507,7 @@ static int pl2303_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 	/* Setup termios */
 	if (tty)
-		pl2303_set_termios(tty, port, &tmp_termios);
+		pl2303_set_termios(tty, port, NULL);
 
 	result = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 	if (result) {
@@ -773,7 +773,6 @@ static void pl2303_process_read_urb(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
 	struct pl2303_private *priv = usb_get_serial_port_data(port);
-	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 	char tty_flag = TTY_NORMAL;
 	unsigned long flags;
@@ -790,10 +789,6 @@ static void pl2303_process_read_urb(struct urb *urb)
 	if (!urb->actual_length)
 		return;
 
-	tty = tty_port_tty_get(&port->port);
-	if (!tty)
-		return;
-
 	/* break takes precedence over parity, */
 	/* which takes precedence over framing errors */
 	if (line_status & UART_BREAK_ERROR)
@@ -806,19 +801,19 @@ static void pl2303_process_read_urb(struct urb *urb)
 
 	/* overrun is special, not associated with a char */
 	if (line_status & UART_OVERRUN_ERROR)
-		tty_insert_flip_char(tty, 0, TTY_OVERRUN);
+		tty_insert_flip_char(&port->port, 0, TTY_OVERRUN);
 
 	if (port->port.console && port->sysrq) {
 		for (i = 0; i < urb->actual_length; ++i)
 			if (!usb_serial_handle_sysrq_char(port, data[i]))
-				tty_insert_flip_char(tty, data[i], tty_flag);
+				tty_insert_flip_char(&port->port, data[i],
+						tty_flag);
 	} else {
-		tty_insert_flip_string_fixed_flag(tty, data, tty_flag,
+		tty_insert_flip_string_fixed_flag(&port->port, data, tty_flag,
 							urb->actual_length);
 	}
 
-	tty_flip_buffer_push(tty);
-	tty_kref_put(tty);
+	tty_flip_buffer_push(&port->port);
 }
 
 /* All of the device info needed for the PL2303 SIO serial converter */

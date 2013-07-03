@@ -26,7 +26,7 @@
 		apbh@80000000 {
 			ssp1: ssp@80034000 {
 				compatible = "fsl,imx23-spi";
-			//	clock-frequency = <160000000>;
+				clock-frequency = <160000000>;
 				bus-num = <1>;
 				pinctrl-names = "default";
 				pinctrl-0 = <&spi1_control_pins &spi1_cs_pins &tft_pins>;
@@ -36,21 +36,20 @@
 				#size-cells = <0>;
 
 				device@0 {
-			  	compatible = "spidev";
+					compatible = "spidev";
 					reg = <0>;
-					spi-max-frequency = <100000>;
+					spi-max-frequency = <16000000>;
 					interrupts = <&gpio2 28>;
 					interrupt-names = "spidev-trigger";
-				   };
+				};
 
-				device@1 {
-					compatible = "adafruit18fb";
+		
+			device@1 {
+					compatible = "st7735fb";
 					reg = <1>;
 					spi-max-frequency = <8000000>;
-					adafruit18fb,dc-gpio = <&gpio1 1 0>;
-					//dc = <&gpio1 1 0>;
-					adafruit18fb,rst-gpio = <&gpio1 0 0>;
-					//reset = <&gpio1 0 0>;
+					st7735fb,dc-gpio = <&gpio1 1 0>;
+					st7735fb,rst-gpio = <&gpio1 0 0>;
 					big-endian = <1>;
 				};
 			};
@@ -77,7 +76,7 @@
 					>;
 					fsl,pull-up = <1>;
 				};
-				gpio: gpio {
+				tft_pins: tft_pins {
 					reg = <0>;
 					fsl,pinmux-ids = <
 						0x1013  // MX23_PAD_LCD_D01__GPIO_1_1 aka D/C
@@ -98,7 +97,7 @@
 				pinctrl-names = "default";
 				pinctrl-0 = <&mmc0_4bit_pins_a &mmc0_pins_fixup>;
 				bus-width = <4>;
-				broken-cd;
+				non-removable;
 				status = "okay";
 			};
 
@@ -139,9 +138,9 @@
 
 		apbx@80040000 {
 			i2c0: i2c@80058000 {
-			pinctrl-names = "default";
-			pinctrl-0 = <&i2c_pins_b>;
-			status = "okay";
+				pinctrl-names = "default";
+				pinctrl-0 = <&i2c1_pins_a>;
+				status = "okay";
 			};
 
 			duart: serial@80070000 {
@@ -173,7 +172,6 @@
 
 		vbus_toggle {
 			gpio-export,name = "vbus_toggle";
-			//gpio-export,name = "dc";
 			gpio-export,output = <1>;
 			gpios = <&gpio0 17 0>;
 		};

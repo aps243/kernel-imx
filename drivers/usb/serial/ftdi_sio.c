@@ -191,6 +191,8 @@ static struct usb_device_id id_table_combined [] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_OPENDCC_GBM_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_OPENDCC_GBM_BOOST_PID) },
 	{ USB_DEVICE(NEWPORT_VID, NEWPORT_AGILIS_PID) },
+	{ USB_DEVICE(NEWPORT_VID, NEWPORT_CONEX_CC_PID) },
+	{ USB_DEVICE(NEWPORT_VID, NEWPORT_CONEX_AGP_PID) },
 	{ USB_DEVICE(INTERBIOMETRICS_VID, INTERBIOMETRICS_IOBOARD_PID) },
 	{ USB_DEVICE(INTERBIOMETRICS_VID, INTERBIOMETRICS_MINI_IOBOARD_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_SPROG_II) },
@@ -929,8 +931,8 @@ static int ftdi_get_icount(struct tty_struct *tty,
 static int  ftdi_ioctl(struct tty_struct *tty,
 			unsigned int cmd, unsigned long arg);
 static void ftdi_break_ctl(struct tty_struct *tty, int break_state);
-static int ftdi_chars_in_buffer(struct tty_struct *tty);
-static int ftdi_get_modem_status(struct tty_struct *tty,
+static bool ftdi_tx_empty(struct usb_serial_port *port);
+static int ftdi_get_modem_status(struct usb_serial_port *port,
 						unsigned char status[2]);
 
 static unsigned short int ftdi_232am_baud_base_to_divisor(int baud, int base);
@@ -966,7 +968,7 @@ static struct usb_serial_driver ftdi_sio_device = {
 	.ioctl =		ftdi_ioctl,
 	.set_termios =		ftdi_set_termios,
 	.break_ctl =		ftdi_break_ctl,
-	.chars_in_buffer =      ftdi_chars_in_buffer,
+	.tx_empty =		ftdi_tx_empty,
 };
 
 static struct usb_serial_driver * const serial_drivers[] = {
@@ -1963,9 +1965,8 @@ static int ftdi_prepare_write_buffer(struct usb_serial_port *port,
 
 #define FTDI_RS_ERR_MASK (FTDI_RS_BI | FTDI_RS_PE | FTDI_RS_FE | FTDI_RS_OE)
 
-static int ftdi_process_packet(struct tty_struct *tty,
-		struct usb_serial_port *port, struct ftdi_private *priv,
-		char *packet, int len)
+static int ftdi_process_packet(struct usb_serial_port *port,
+		struct ftdi_private *priv, char *packet, int len)
 {
 	int i;
 	char status;
@@ -2015,7 +2016,7 @@ static int ftdi_process_packet(struct tty_struct *tty,
 		/* Overrun is special, not associated with a char */
 		if (packet[1] & FTDI_RS_OE) {
 			priv->icount.overrun++;
-			tty_insert_flip_char(tty, 0, TTY_OVERRUN);
+			tty_insert_flip_char(&port->port, 0, TTY_OVERRUN);
 		}
 	}
 
@@ -2034,10 +2035,10 @@ static int ftdi_process_packet(struct tty_struct *tty,
 	if (port->port.console && port->sysrq) {
 		for (i = 0; i < len; i++, ch++) {
 			if (!usb_serial_handle_sysrq_char(port, *ch))
-				tty_insert_flip_char(tty, *ch, flag);
+				tty_insert_flip_char(&port->port, *ch, flag);
 		}
 	} else {
-		tty_insert_flip_string_fixed_flag(tty, ch, flag, len);
+		tty_insert_flip_string_fixed_flag(&port->port, ch, flag, len);
 	}
 
 	return len;
@@ -2046,25 +2047,19 @@ static int ftdi_process_packet(struct tty_struct *tty,
 static void ftdi_process_read_urb(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
-	struct tty_struct *tty;
 	struct ftdi_private *priv = usb_get_serial_port_data(port);
 	char *data = (char *)urb->transfer_buffer;
 	int i;
 	int len;
 	int count = 0;
 
-	tty = tty_port_tty_get(&port->port);
-	if (!tty)
-		return;
-
 	for (i = 0; i < urb->actual_length; i += priv->max_packet_size) {
 		len = min_t(int, urb->actual_length - i, priv->max_packet_size);
-		count += ftdi_process_packet(tty, port, priv, &data[i], len);
+		count += ftdi_process_packet(port, priv, &data[i], len);
 	}
 
 	if (count)
-		tty_flip_buffer_push(tty);
-	tty_kref_put(tty);
+		tty_flip_buffer_push(&port->port);
 }
 
 static void ftdi_break_ctl(struct tty_struct *tty, int break_state)
@@ -2097,27 +2092,18 @@ static void ftdi_break_ctl(struct tty_struct *tty, int break_state)
 
 }
 
-static int ftdi_chars_in_buffer(struct tty_struct *tty)
+static bool ftdi_tx_empty(struct usb_serial_port *port)
 {
-	struct usb_serial_port *port = tty->driver_data;
-	int chars;
 	unsigned char buf[2];
 	int ret;
 
-	chars = usb_serial_generic_chars_in_buffer(tty);
-	if (chars)
-		goto out;
-
-	/* Check if hardware buffer is empty. */
-	ret = ftdi_get_modem_status(tty, buf);
+	ret = ftdi_get_modem_status(port, buf);
 	if (ret == 2) {
 		if (!(buf[1] & FTDI_RS_TEMT))
-			chars = 1;
+			return false;
 	}
-out:
-	dev_dbg(&port->dev, "%s - %d\n", __func__, chars);
 
-	return chars;
+	return true;
 }
 
 /* old_termios contains the original termios settings and tty->termios contains
@@ -2309,10 +2295,9 @@ no_c_cflag_changes:
  * Returns the number of status bytes retrieved (device dependant), or
  * negative error code.
  */
-static int ftdi_get_modem_status(struct tty_struct *tty,
+static int ftdi_get_modem_status(struct usb_serial_port *port,
 						unsigned char status[2])
 {
-	struct usb_serial_port *port = tty->driver_data;
 	struct ftdi_private *priv = usb_get_serial_port_data(port);
 	unsigned char *buf;
 	int len;
@@ -2377,7 +2362,7 @@ static int ftdi_tiocmget(struct tty_struct *tty)
 	unsigned char buf[2];
 	int ret;
 
-	ret = ftdi_get_modem_status(tty, buf);
+	ret = ftdi_get_modem_status(port, buf);
 	if (ret < 0)
 		return ret;
 

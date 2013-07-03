@@ -57,8 +57,8 @@ static struct fb_videomode oli_video_modes[] = {
                 .lower_margin   = 0,
                 .hsync_len      = 5,
                 .vsync_len      = 1,
-               // .sync           = FB_SYNC_DATA_ENABLE_HIGH_ACT |
-               //                   FB_SYNC_DOTCLK_FAILING_ACT,
+//                .sync           = FB_SYNC_DATA_ENABLE_HIGH_ACT |
+ //                                 FB_SYNC_DOTCLK_FAILING_ACT,
 
         },
 };
@@ -143,7 +143,6 @@ static struct fb_videomode cfa10049_video_modes[] = {
 		.lower_margin	= 2,
 		.hsync_len	= 15,
 		.vsync_len	= 15,
-		.sync		= MXSFB_SYNC_DATA_ENABLE_HIGH_ACT
 	},
 };
 
@@ -191,18 +190,10 @@ static void __init imx23_timer_init(void)
 	mx23_clocks_init();
 }
 
-static struct sys_timer imx23_timer = {
-	.init = imx23_timer_init,
-};
-
 static void __init imx28_timer_init(void)
 {
 	mx28_clocks_init();
 }
-
-static struct sys_timer imx28_timer = {
-	.init = imx28_timer_init,
-};
 
 enum mac_oui {
 	OUI_FSL,
@@ -437,17 +428,18 @@ static void __init cfa10049_init(void)
 {
 	enable_clk_enet_out();
 	update_fec_mac_prop(OUI_CRYSTALFONTZ);
+
+	mxsfb_pdata.mode_list = cfa10049_video_modes;
+	mxsfb_pdata.mode_count = ARRAY_SIZE(cfa10049_video_modes);
+	mxsfb_pdata.default_bpp = 32;
+	mxsfb_pdata.ld_intf_width = STMLCDIF_18BIT;
+	mxsfb_pdata.sync = MXSFB_SYNC_DATA_ENABLE_HIGH_ACT;
 }
 
 static void __init cfa10037_init(void)
 {
 	enable_clk_enet_out();
 	update_fec_mac_prop(OUI_CRYSTALFONTZ);
-
-	mxsfb_pdata.mode_list = cfa10049_video_modes;
-	mxsfb_pdata.mode_count = ARRAY_SIZE(cfa10049_video_modes);
-	mxsfb_pdata.default_bpp = 32;
-	mxsfb_pdata.ld_intf_width = STMLCDIF_18BIT;
 }
 
 static void __init apf28_init(void)
@@ -507,7 +499,7 @@ DT_MACHINE_START(IMX23, "Freescale i.MX23 (Device Tree)")
 	.map_io		= mx23_map_io,
 	.init_irq	= icoll_init_irq,
 	.handle_irq	= icoll_handle_irq,
-	.timer		= &imx23_timer,
+	.init_time	= imx23_timer_init,
 	.init_machine	= mxs_machine_init,
 	.dt_compat	= imx23_dt_compat,
 	.restart	= mxs_restart,
@@ -517,7 +509,7 @@ DT_MACHINE_START(IMX28, "Freescale i.MX28 (Device Tree)")
 	.map_io		= mx28_map_io,
 	.init_irq	= icoll_init_irq,
 	.handle_irq	= icoll_handle_irq,
-	.timer		= &imx28_timer,
+	.init_time	= imx28_timer_init,
 	.init_machine	= mxs_machine_init,
 	.dt_compat	= imx28_dt_compat,
 	.restart	= mxs_restart,

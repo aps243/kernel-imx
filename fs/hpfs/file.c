@@ -109,10 +109,14 @@ static void hpfs_write_failed(struct address_space *mapping, loff_t to)
 {
 	struct inode *inode = mapping->host;
 
+	hpfs_lock(inode->i_sb);
+
 	if (to > inode->i_size) {
 		truncate_pagecache(inode, to, inode->i_size);
 		hpfs_truncate(inode);
 	}
+
+	hpfs_unlock(inode->i_sb);
 }
 
 static int hpfs_write_begin(struct file *file, struct address_space *mapping,
@@ -152,7 +156,7 @@ static ssize_t hpfs_file_write(struct file *file, const char __user *buf,
 	retval = do_sync_write(file, buf, count, ppos);
 	if (retval > 0) {
 		hpfs_lock(file->f_path.dentry->d_sb);
-		hpfs_i(file->f_path.dentry->d_inode)->i_dirty = 1;
+		hpfs_i(file_inode(file))->i_dirty = 1;
 		hpfs_unlock(file->f_path.dentry->d_sb);
 	}
 	return retval;
